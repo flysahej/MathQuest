@@ -252,22 +252,26 @@ public class MainMenu extends JFrame {
             return;
         }
         int level       = DatabaseManager.getInt(save, "level_number");
-        int playerIndex = DatabaseManager.getInt(save, "player_index");
+        int currentPlayer = save.containsKey("current_player")
+            ? DatabaseManager.getInt(save, "current_player")
+            : DatabaseManager.getInt(save, "player_index");
         java.util.List<java.util.Map<String,Object>> players =
             (java.util.List<java.util.Map<String,Object>>) save.get("players");
         String[] names = new String[players.size()];
         int[] scores   = new int[players.size()];
         int[] streaks  = new int[players.size()];
         int[] ducks    = new int[players.size()];
+        int[] positions = new int[players.size()];
         for (int i = 0; i < players.size(); i++) {
             names[i]   = (String) players.get(i).get("name");
             scores[i]  = DatabaseManager.getInt(players.get(i), "score");
             streaks[i] = DatabaseManager.getInt(players.get(i), "streak");
             ducks[i]   = DatabaseManager.getInt(players.get(i), "duck_count");
+            positions[i] = DatabaseManager.getInt(players.get(i), "position");
         }
         dispose();
         SwingUtilities.invokeLater(() ->
-            new GameBoard(names, scores, streaks, ducks, playerIndex, level));
+            new GameBoard(names, scores, streaks, ducks, positions, currentPlayer, level));
     }
     
     private void showHighScores() {

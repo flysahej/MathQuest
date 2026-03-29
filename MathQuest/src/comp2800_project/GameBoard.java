@@ -80,12 +80,12 @@ public class GameBoard extends JFrame {
 
     /** Load-game constructor — restores a previously saved session. */
     public GameBoard(String[] playerNames, int[] scores, int[] streaks,
-                     int[] ducks, int currentPlayer, int level) {
+                     int[] ducks, int[] positions, int currentPlayer, int level) {
         this.playerNames   = playerNames;
         this.level         = level;
         this.currentPlayer = currentPlayer;
         int n = playerNames.length;
-        playerPositions = new int[n];   // positions stored in player_index; use 0 as default
+        playerPositions = Arrays.copyOf(positions, n);
         playerScores    = scores;
         playerStreaks    = streaks;
         playerDucks     = ducks;
@@ -358,7 +358,7 @@ public class GameBoard extends JFrame {
     // ─────────────────────────────────────────────────────────────────────
 
     private void showQuestion() {
-        int row = playerPositions[currentPlayer] / 5;
+        int row = Math.max(0, Math.min(2, level - 1));
         QuestionGenerator.Question q =
                 new QuestionGenerator(level).generateQuestion(row);
 
@@ -691,7 +691,7 @@ public class GameBoard extends JFrame {
         int gameId = choice + 1;
         List<Map<String, Object>> plist =
                 DatabaseManager.buildPlayerList(playerNames, playerScores,
-                                                playerStreaks, playerDucks);
+                                                playerStreaks, playerDucks, playerPositions);
         db.insertGame(gameId, level, currentPlayer, plist);
 
         JOptionPane.showMessageDialog(this,

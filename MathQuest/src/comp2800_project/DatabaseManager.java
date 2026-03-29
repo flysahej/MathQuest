@@ -116,7 +116,8 @@ public class DatabaseManager {
             "CREATE TABLE IF NOT EXISTS saved_games ("
           + "  game_id      INTEGER PRIMARY KEY,"   // 1, 2, or 3  (same as Python game_id)
           + "  level_number INTEGER NOT NULL,"
-          + "  player_index INTEGER NOT NULL"       // current board position 0–14
+          + "  player_index INTEGER NOT NULL,"      // legacy field kept for compatibility
+          + "  current_player INTEGER NOT NULL DEFAULT 0"
           + ");";
 
         String savedPlayers =
@@ -128,6 +129,7 @@ public class DatabaseManager {
           + "  password     TEXT    NOT NULL DEFAULT '',"
           + "  streak       INTEGER NOT NULL DEFAULT 0,"
           + "  duck_count   INTEGER NOT NULL DEFAULT 0,"
+          + "  position     INTEGER NOT NULL DEFAULT 0,"
           + "  score        REAL    NOT NULL DEFAULT 0,"
           + "  FOREIGN KEY (game_id) REFERENCES saved_games(game_id) ON DELETE CASCADE"
           + ");";
@@ -172,10 +174,34 @@ public class DatabaseManager {
             st.execute(highScores);
             st.execute(gameSessions);
             st.execute(questionLog);
+            ensureSaveSchema(st);
             System.out.println("[DB] Tables ready.");
         } catch (SQLException e) {
             System.err.println("[DB] createTables error: " + e.getMessage());
         }
+    }
+
+    private void ensureSaveSchema(Statement st) throws SQLException {
+        Set<String> savedGameColumns = getColumnNames("saved_games");
+        if (!savedGameColumns.contains("current_player")) {
+            st.execute("ALTER TABLE saved_games ADD COLUMN current_player INTEGER NOT NULL DEFAULT 0");
+        }
+
+        Set<String> savedPlayerColumns = getColumnNames("saved_game_players");
+        if (!savedPlayerColumns.contains("position")) {
+            st.execute("ALTER TABLE saved_game_players ADD COLUMN position INTEGER NOT NULL DEFAULT 0");
+        }
+    }
+
+    private Set<String> getColumnNames(String tableName) throws SQLException {
+        Set<String> columns = new HashSet<>();
+        try (Statement pragma = connection.createStatement();
+             ResultSet rs = pragma.executeQuery("PRAGMA table_info(" + tableName + ")")) {
+            while (rs.next()) {
+                columns.add(rs.getString("name"));
+            }
+        }
+        return columns;
     }
 
     // =========================================================================
@@ -198,19 +224,21 @@ public class DatabaseManager {
      */
     public void insertGame(int gameId,
                            int levelNumber,
-                           int playerIndex,
+                           int currentPlayer,
                            List<Map<String, Object>> players) {
         try {
             connection.setAutoCommit(false);
 
             // Upsert the header row (INSERT OR REPLACE handles the slot overwrite)
             String upsertHeader =
-                "INSERT OR REPLACE INTO saved_games (game_id, level_number, player_index) "
-              + "VALUES (?, ?, ?)";
+                "INSERT OR REPLACE INTO saved_games "
+              + "(game_id, level_number, player_index, current_player) "
+              + "VALUES (?, ?, ?, ?)";
             try (PreparedStatement ps = connection.prepareStatement(upsertHeader)) {
                 ps.setInt(1, gameId);
                 ps.setInt(2, levelNumber);
-                ps.setInt(3, playerIndex);
+                ps.setInt(3, currentPlayer);
+                ps.setInt(4, currentPlayer);
                 ps.executeUpdate();
             }
 
@@ -223,8 +251,8 @@ public class DatabaseManager {
 
             String insertPlayer =
                 "INSERT INTO saved_game_players "
-              + "(game_id, player_order, name, password, streak, duck_count, score) "
-              + "VALUES (?, ?, ?, ?, ?, ?, ?)";
+              + "(game_id, player_order, name, password, streak, duck_count, position, score) "
+              + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
             try (PreparedStatement ps = connection.prepareStatement(insertPlayer)) {
                 for (int i = 0; i < players.size(); i++) {
                     Map<String, Object> p = players.get(i);
@@ -234,7 +262,8 @@ public class DatabaseManager {
                     ps.setString(4, getString(p, "password"));
                     ps.setInt(5, getInt(p, "streak"));
                     ps.setInt(6, getInt(p, "duck_count"));
-                    ps.setDouble(7, getDouble(p, "score"));
+                    ps.setInt(7, getInt(p, "position"));
+                    ps.setDouble(8, getDouble(p, "score"));
                     ps.addBatch();
                 }
                 ps.executeBatch();
@@ -298,7 +327,7 @@ public class DatabaseManager {
      * @return Map representing the saved game, or null if not found.
      */
     public Map<String, Object> findGameById(int gameId) {
-        String sql = "SELECT game_id, level_number, player_index FROM saved_games WHERE game_id = ?";
+        String sql = "SELECT game_id, level_number, player_index, current_player FROM saved_games WHERE game_id = ?";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setInt(1, gameId);
             ResultSet rs = ps.executeQuery();
@@ -312,11 +341,12 @@ public class DatabaseManager {
             game.put("game_id",      rs.getInt("game_id"));
             game.put("level_number", rs.getInt("level_number"));
             game.put("player_index", rs.getInt("player_index"));
+            game.put("current_player", rs.getInt("current_player"));
 
             // Load the players list
             List<Map<String, Object>> players = new ArrayList<>();
             String playerSql =
-                "SELECT name, password, streak, duck_count, score "
+                "SELECT name, password, streak, duck_count, position, score "
               + "FROM saved_game_players WHERE game_id = ? ORDER BY player_order ASC";
             try (PreparedStatement ps2 = connection.prepareStatement(playerSql)) {
                 ps2.setInt(1, gameId);
@@ -327,6 +357,7 @@ public class DatabaseManager {
                     player.put("password",   rs2.getString("password"));
                     player.put("streak",     rs2.getInt("streak"));
                     player.put("duck_count", rs2.getInt("duck_count"));
+                    player.put("position",   rs2.getInt("position"));
                     player.put("score",      rs2.getDouble("score"));
                     players.add(player);
                 }
@@ -474,9 +505,10 @@ public class DatabaseManager {
      * @return List of player maps ready for insertGame().
      */
     public static List<Map<String, Object>> buildPlayerList(String[] names,
-                                                             int[]    scores,
-                                                             int[]    streaks,
-                                                             int[]    ducks) {
+                                                            int[]    scores,
+                                                            int[]    streaks,
+                                                            int[]    ducks,
+                                                            int[]    positions) {
         List<Map<String, Object>> players = new ArrayList<>();
         for (int i = 0; i < names.length; i++) {
             Map<String, Object> p = new LinkedHashMap<>();
@@ -484,6 +516,7 @@ public class DatabaseManager {
             p.put("password",   "");          // Java version has no password field
             p.put("streak",     streaks[i]);
             p.put("duck_count", ducks[i]);
+            p.put("position",   positions[i]);
             p.put("score",      (double) scores[i]);
             players.add(p);
         }
